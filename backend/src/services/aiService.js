@@ -15,14 +15,14 @@ export class AIService {
       'gpt-4': 'gpt-4',
       'gpt-3.5-turbo': 'gpt-3.5-turbo',
       'gemini-pro': 'gemini-pro',
-      'gemini-2.0-flash': 'gemini-2.0-flash-exp'
+      'gemini-2.0-flash': 'gemini-1.5-flash'
     };
   }
 
-  // Generate embeddings using OpenAI with fallback to Gemini
+  // Generate embeddings using OpenAI only (to maintain 1536 dimensions)
   async generateEmbeddings(text) {
     try {
-      // Try OpenAI first
+      // Only use OpenAI for embeddings to ensure consistent 1536 dimensions
       const response = await openai.embeddings.create({
         model: 'text-embedding-3-small',
         input: text,
@@ -30,32 +30,29 @@ export class AIService {
 
       return response.data[0].embedding;
     } catch (error) {
-      logger.warn('OpenAI embeddings failed, falling back to Gemini:', error.message);
+      logger.error('OpenAI embeddings failed:', error.message);
       
-      try {
-        // Fallback to Gemini for embeddings
-        const model = genAI.getGenerativeModel({ model: 'text-embedding-004' });
-        const result = await model.embedContent(text);
-        return result.embedding.values;
-      } catch (geminiError) {
-        logger.error('Both OpenAI and Gemini embeddings failed:', geminiError);
-        
-        // Return a simple hash-based embedding as last resort
-        return this.generateSimpleEmbedding(text);
+      // If OpenAI fails, throw error instead of falling back to incompatible models
+      if (error.code === 'insufficient_quota') {
+        throw new Error('OpenAI quota exceeded. Please check your API quota and billing.');
       }
+      
+      // For other errors, use the simple embedding fallback that matches 1536 dimensions
+      logger.warn('Using simple embedding fallback due to OpenAI failure');
+      return this.generateSimpleEmbedding(text);
     }
   }
 
-  // Generate simple hash-based embedding as fallback
+  // Generate simple hash-based embedding with 1536 dimensions to match Astra DB
   generateSimpleEmbedding(text) {
-    const embedding = new Array(384).fill(0);
+    const embedding = new Array(1536).fill(0);
     for (let i = 0; i < text.length; i++) {
       const charCode = text.charCodeAt(i);
-      embedding[i % 384] += charCode;
+      embedding[i % 1536] += charCode;
     }
     // Normalize
     const magnitude = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    return embedding.map(val => val / magnitude);
+    return embedding.map(val => val / (magnitude || 1));
   }
 
   // Generate chat response using specified model
@@ -77,9 +74,9 @@ export class AIService {
     } catch (error) {
       logger.error('Error generating AI response:', error);
       
-      // Fallback to Gemini 2.0 Flash if other models fail
+      // Fallback to Gemini 1.5 Flash if other models fail
       if (!model.startsWith('gemini')) {
-        logger.info('Falling back to Gemini 2.0 Flash');
+        logger.info('Falling back to Gemini 1.5 Flash');
         try {
           const systemPrompt = this.buildSystemPrompt(context, language);
           const fullMessages = [
@@ -124,7 +121,7 @@ export class AIService {
   // Generate response using Gemini
   async generateGeminiResponse(modelName, messages) {
     try {
-      const geminiModel = this.models[modelName] || 'gemini-2.0-flash-exp';
+      const geminiModel = this.models[modelName] || 'gemini-1.5-flash';
       const model = genAI.getGenerativeModel({ 
         model: geminiModel,
         systemInstruction: this._extractSystemInstruction(messages)
@@ -259,9 +256,9 @@ Use this information to answer the user's question accurately.`;
     } catch (error) {
       logger.error('Error generating stream response:', error);
       
-      // Final fallback to Gemini 2.0 Flash
+      // Final fallback to Gemini 1.5 Flash
       try {
-        logger.info('Falling back to Gemini 2.0 Flash streaming');
+        logger.info('Falling back to Gemini 1.5 Flash streaming');
         const systemPrompt = this.buildSystemPrompt(context, language);
         const fullMessages = [
           { role: 'system', content: systemPrompt },
@@ -278,7 +275,7 @@ Use this information to answer the user's question accurately.`;
   // Generate streaming response using Gemini
   async generateGeminiStreamResponse(modelName, messages) {
     try {
-      const geminiModel = this.models[modelName] || 'gemini-2.0-flash-exp';
+      const geminiModel = this.models[modelName] || 'gemini-1.5-flash';
       const model = genAI.getGenerativeModel({ 
         model: geminiModel,
         systemInstruction: this._extractSystemInstruction(messages)
@@ -358,7 +355,7 @@ Use this information to answer the user's question accurately.`;
       
       try {
         // Fallback to Gemini
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         const prompt = `Translate the following text to ${targetLanguage}. Only return the translation, no additional text.\n\nText: ${text}`;
         
         const result = await model.generateContent(prompt);
@@ -397,7 +394,7 @@ Use this information to answer the user's question accurately.`;
       
       try {
         // Fallback to Gemini
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         const prompt = `Detect the language of the following text. Return only the language code (e.g., en, es, fr, de, hi, ne, zh, ja).\n\nText: ${text}`;
         
         const result = await model.generateContent(prompt);

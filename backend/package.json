@@ -1,0 +1,54 @@
+{
+  "name": "chatbot-builder-backend",
+  "version": "1.0.0",
+  "description": "Backend API for No-Code Multilingual AI Chatbot Builder",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "build": "echo 'Build complete'",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@datastax/astra-db-ts": "^2.0.1",
+    "@google/generative-ai": "^0.2.1",
+    "@supabase/supabase-js": "^2.39.3",
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "joi": "^17.11.0",
+    "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.6.0",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "node-cron": "^3.0.3",
+    "openai": "^4.20.1",
+    "pdf-parse": "^1.1.1",
+    "pdf-text-extract": "^1.5.0",
+    "pdfjs-dist": "^5.3.31",
+    "redis": "^4.6.10",
+    "socket.io": "^4.7.4",
+    "uuid": "^9.0.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.2",
+    "supertest": "^6.3.3"
+  },
+  "keywords": [
+    "chatbot",
+    "ai",
+    "rag",
+    "multilingual",
+    "saas"
+  ],
+  "author": "ChatBot Builder Team",
+  "license": "MIT"
+}

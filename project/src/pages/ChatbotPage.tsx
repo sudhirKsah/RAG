@@ -1,7 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { DashboardLayout } from '../components/Layout/DashboardLayout';
 import { ChromePicker } from 'react-color';
+import { toast } from 'react-hot-toast';
+import { api } from '../lib/api';
 import {
   Bot,
   Settings,
@@ -13,6 +15,8 @@ import {
   Eye,
   Copy,
   ExternalLink,
+  Send,
+  Loader2,
 } from 'lucide-react';
 
 const aiModels = [
@@ -32,7 +36,15 @@ const languages = [
   { code: 'ja', name: 'Japanese', flag: '🇯🇵' },
 ];
 
+interface ChatMessage {
+  id: string;
+  content: string;
+  isBot: boolean;
+  timestamp: Date;
+}
+
 export const ChatbotPage: React.FC = () => {
+  const [chatbotId, setChatbotId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState('gpt-4');
   const [selectedLanguages, setSelectedLanguages] = useState(['en']);
   const [companyName, setCompanyName] = useState('Your Company');
@@ -40,6 +52,104 @@ export const ChatbotPage: React.FC = () => {
   const [primaryColor, setPrimaryColor] = useState('#2563eb');
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [logo, setLogo] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  // Live preview chat state
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [currentMessage, setCurrentMessage] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
+
+  // Load existing chatbot data on component mount
+  useEffect(() => {
+    loadChatbotData();
+  }, []);
+
+  // Initialize chat with welcome message when chatbot data loads
+  useEffect(() => {
+    if (chatbotId && chatMessages.length === 0) {
+      setChatMessages([{
+        id: '1',
+        content: welcomeMessage,
+        isBot: true,
+        timestamp: new Date()
+      }]);
+    }
+  }, [chatbotId, welcomeMessage]);
+
+  const loadChatbotData = async () => {
+    try {
+      setIsLoading(true);
+      const chatbots = await api.getChatbots();
+      
+      if (chatbots.length > 0) {
+        // Load existing chatbot
+        const chatbot = chatbots[0];
+        setChatbotId(chatbot.id);
+        setCompanyName(chatbot.name || 'Your Company');
+        setSelectedModel(chatbot.model || 'gpt-4');
+        setWelcomeMessage(chatbot.welcome_message || 'Hi! How can I help you today?');
+        setPrimaryColor(chatbot.primary_color || '#2563eb');
+        setSelectedLanguages(chatbot.supported_languages || ['en']);
+        setLogo(chatbot.logo_url || null);
+      } else {
+        // Create new chatbot
+        const newChatbot = await api.createChatbot({
+          name: companyName,
+          model: selectedModel,
+          welcome_message: welcomeMessage,
+          primary_color: primaryColor,
+          supported_languages: selectedLanguages,
+          logo_url: logo
+        });
+        setChatbotId(newChatbot.id);
+        toast.success('New chatbot created successfully!');
+      }
+    } catch (error) {
+      console.error('Error loading chatbot data:', error);
+      toast.error('Failed to load chatbot data');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSaveChanges = async () => {
+    if (!chatbotId) {
+      toast.error('No chatbot to save');
+      return;
+    }
+
+    try {
+      setIsSaving(true);
+      await api.updateChatbot(chatbotId, {
+        name: companyName,
+        model: selectedModel,
+        welcome_message: welcomeMessage,
+        primary_color: primaryColor,
+        supported_languages: selectedLanguages,
+        logo_url: logo
+      });
+      
+      toast.success('Chatbot settings saved successfully!');
+      
+      // Update the welcome message in chat if it changed
+      setChatMessages(prev => {
+        const updated = [...prev];
+        if (updated.length > 0 && updated[0].isBot) {
+          updated[0] = {
+            ...updated[0],
+            content: welcomeMessage
+          };
+        }
+        return updated;
+      });
+    } catch (error) {
+      console.error('Error saving chatbot:', error);
+      toast.error('Failed to save chatbot settings');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const handleLanguageToggle = (langCode: string) => {
     setSelectedLanguages(prev => {
@@ -62,7 +172,75 @@ export const ChatbotPage: React.FC = () => {
     }
   };
 
-  const chatbotUrl = `https://chat.${companyName.toLowerCase().replace(/\s+/g, '')}.com`;
+  const handleSendMessage = async () => {
+    if (!currentMessage.trim() || !chatbotId || isSendingMessage) return;
+
+    const userMessage: ChatMessage = {
+      id: Date.now().toString(),
+      content: currentMessage,
+      isBot: false,
+      timestamp: new Date()
+    };
+
+    setChatMessages(prev => [...prev, userMessage]);
+    setCurrentMessage('');
+    setIsSendingMessage(true);
+
+    try {
+      const response = await api.sendMessage(chatbotId, currentMessage);
+      
+      const botMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        content: response.message,
+        isBot: true,
+        timestamp: new Date()
+      };
+
+      setChatMessages(prev => [...prev, botMessage]);
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const errorMessage: ChatMessage = {
+        id: (Date.now() + 1).toString(),
+        content: 'Sorry, I encountered an error. Please try again.',
+        isBot: true,
+        timestamp: new Date()
+      };
+      setChatMessages(prev => [...prev, errorMessage]);
+      toast.error('Failed to send message');
+    } finally {
+      setIsSendingMessage(false);
+    }
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  const chatbotUrl = chatbotId ? `${window.location.origin}/chat/${chatbotId}` : '';
+
+  const handleCopyUrl = () => {
+    navigator.clipboard.writeText(chatbotUrl);
+    toast.success('URL copied to clipboard!');
+  };
+
+  const handleCopyEmbedCode = () => {
+    const embedCode = `<iframe src="${chatbotUrl}" width="400" height="600" frameborder="0"></iframe>`;
+    navigator.clipboard.writeText(embedCode);
+    toast.success('Embed code copied to clipboard!');
+  };
+
+  if (isLoading) {
+    return (
+      <DashboardLayout>
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      </DashboardLayout>
+    );
+  }
 
   return (
     <DashboardLayout>
@@ -74,12 +252,24 @@ export const ChatbotPage: React.FC = () => {
             <p className="text-gray-600 mt-1">Customize your AI chatbot's appearance and behavior</p>
           </div>
           <div className="flex space-x-3">
-            <button className="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors flex items-center">
+            <button 
+              onClick={() => window.open(chatbotUrl, '_blank')}
+              disabled={!chatbotId}
+              className="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               <Eye className="h-4 w-4 mr-2" />
               Preview
             </button>
-            <button className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center">
-              <Save className="h-4 w-4 mr-2" />
+            <button 
+              onClick={handleSaveChanges}
+              disabled={isSaving || !chatbotId}
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isSaving ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4 mr-2" />
+              )}
               Save Changes
             </button>
           </div>
@@ -98,13 +288,14 @@ export const ChatbotPage: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Company Name
+                    Chatbot Name
                   </label>
                   <input
                     type="text"
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="Enter your chatbot name"
                   />
                 </div>
                 
@@ -250,23 +441,34 @@ export const ChatbotPage: React.FC = () => {
                       readOnly
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-gray-50"
                     />
-                    <button className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200 transition-colors">
+                    <button 
+                      onClick={handleCopyUrl}
+                      className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg hover:bg-gray-200 transition-colors"
+                    >
                       <Copy className="h-4 w-4" />
                     </button>
                   </div>
                 </div>
                 
                 <div className="bg-gray-50 p-4 rounded-lg">
-                  <h3 className="font-medium text-gray-900 mb-2">Embed Code</h3>
-                  <code className="text-sm text-gray-600 bg-white p-2 rounded border block">
-                    {`<iframe src="${chatbotUrl}" width="400" height="600"></iframe>`}
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="font-medium text-gray-900">Embed Code</h3>
+                    <button 
+                      onClick={handleCopyEmbedCode}
+                      className="text-sm bg-gray-200 text-gray-700 px-2 py-1 rounded hover:bg-gray-300 transition-colors"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <code className="text-sm text-gray-600 bg-white p-2 rounded border block break-all">
+                    {`<iframe src="${chatbotUrl}" width="400" height="600" frameborder="0"></iframe>`}
                   </code>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Preview Panel */}
+          {/* Live Preview Panel */}
           <div className="lg:col-span-1">
             <div className="bg-white rounded-xl border border-gray-200 p-6 sticky top-6">
               <div className="flex items-center mb-6">
@@ -293,37 +495,46 @@ export const ChatbotPage: React.FC = () => {
                 </div>
                 
                 {/* Chat Messages */}
-                <div className="p-4 h-64 overflow-y-auto bg-gray-50">
-                  <div className="mb-4">
+                <div className="p-4 h-64 overflow-y-auto bg-gray-50 space-y-3">
+                  {chatMessages.map((message) => (
+                    <div key={message.id} className={`flex items-start space-x-2 ${message.isBot ? '' : 'justify-end'}`}>
+                      {message.isBot && (
+                        <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
+                          <Bot className="h-3 w-3 text-gray-600" />
+                        </div>
+                      )}
+                      <div 
+                        className={`p-3 rounded-lg max-w-xs ${
+                          message.isBot 
+                            ? 'bg-white shadow-sm' 
+                            : 'text-white'
+                        }`}
+                        style={!message.isBot ? { backgroundColor: primaryColor } : {}}
+                      >
+                        <p className={`text-sm ${message.isBot ? 'text-gray-900' : 'text-white'}`}>
+                          {message.content}
+                        </p>
+                      </div>
+                      {!message.isBot && (
+                        <div className="w-6 h-6 bg-gray-300 rounded-full flex-shrink-0"></div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  {isSendingMessage && (
                     <div className="flex items-start space-x-2">
                       <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
                         <Bot className="h-3 w-3 text-gray-600" />
                       </div>
                       <div className="bg-white p-3 rounded-lg shadow-sm max-w-xs">
-                        <p className="text-sm text-gray-900">{welcomeMessage}</p>
+                        <div className="flex space-x-1">
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                          <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <div className="flex items-start space-x-2 justify-end">
-                      <div className="p-3 rounded-lg max-w-xs" style={{ backgroundColor: primaryColor }}>
-                        <p className="text-sm text-white">Hello! I need help with your product.</p>
-                      </div>
-                      <div className="w-6 h-6 bg-gray-300 rounded-full flex-shrink-0"></div>
-                    </div>
-                  </div>
-                  
-                  <div className="mb-4">
-                    <div className="flex items-start space-x-2">
-                      <div className="w-6 h-6 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
-                        <Bot className="h-3 w-3 text-gray-600" />
-                      </div>
-                      <div className="bg-white p-3 rounded-lg shadow-sm max-w-xs">
-                        <p className="text-sm text-gray-900">I'd be happy to help! What specific information are you looking for?</p>
-                      </div>
-                    </div>
-                  </div>
+                  )}
                 </div>
                 
                 {/* Chat Input */}
@@ -332,15 +543,23 @@ export const ChatbotPage: React.FC = () => {
                     <input
                       type="text"
                       placeholder="Type your message..."
-                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm"
-                      disabled
+                      value={currentMessage}
+                      onChange={(e) => setCurrentMessage(e.target.value)}
+                      onKeyPress={handleKeyPress}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      disabled={isSendingMessage}
                     />
                     <button
-                      className="px-4 py-2 rounded-lg text-white text-sm"
+                      onClick={handleSendMessage}
+                      disabled={!currentMessage.trim() || isSendingMessage}
+                      className="px-4 py-2 rounded-lg text-white text-sm disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
                       style={{ backgroundColor: primaryColor }}
-                      disabled
                     >
-                      Send
+                      {isSendingMessage ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <Send className="h-4 w-4" />
+                      )}
                     </button>
                   </div>
                 </div>
@@ -353,6 +572,11 @@ export const ChatbotPage: React.FC = () => {
                 <p className="text-xs text-gray-500 mt-1">
                   Model: {aiModels.find(m => m.id === selectedModel)?.name}
                 </p>
+                {chatbotId && (
+                  <p className="text-xs text-gray-500 mt-1">
+                    ID: {chatbotId}
+                  </p>
+                )}
               </div>
             </div>
           </div>

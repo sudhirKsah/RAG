@@ -16,7 +16,7 @@ export const chatbotSchemas = {
     supported_languages: Joi.array().items(
       Joi.string().valid('en', 'es', 'fr', 'de', 'hi', 'ne', 'zh', 'ja')
     ).min(1).default(['en']),
-    logo_url: Joi.string().uri().optional()
+    logo_url: Joi.string().uri().optional().allow('', null)
   }),
 
   updateChatbot: Joi.object({
@@ -28,7 +28,7 @@ export const chatbotSchemas = {
     supported_languages: Joi.array().items(
       Joi.string().valid('en', 'es', 'fr', 'de', 'hi', 'ne', 'zh', 'ja')
     ).min(1).optional(),
-    logo_url: Joi.string().uri().optional(),
+    logo_url: Joi.string().uri().optional().allow('', null),
     status: Joi.string().valid('active', 'inactive').optional()
   })
 };

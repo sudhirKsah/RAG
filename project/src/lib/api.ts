@@ -167,12 +167,20 @@ export const api = {
     }),
 
   // Chat endpoints (public)
-  sendMessage: (chatbotId: string, message: any) =>
-    fetch(`${API_URL}/chat/${chatbotId}`, {
+  sendMessage: async (chatbotId: string, data: { message: string; language?: string; session_id?: string; conversation_history?: any[] }) => {
+    const response = await fetch(`${API_URL}/chat/${chatbotId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(message),
-    }),
+      body: JSON.stringify(data),
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to send message');
+    }
+    
+    const result = await response.json();
+    return result.data;
+  },
 
   streamMessage: (chatbotId: string, message: any) =>
     fetch(`${API_URL}/chat/${chatbotId}/stream`, {

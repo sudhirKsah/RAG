@@ -14,7 +14,8 @@ export class AIService {
     this.models = {
       'gpt-4': 'gpt-4',
       'gpt-3.5-turbo': 'gpt-3.5-turbo',
-      'gemini-pro': 'gemini-pro'
+      'gemini-pro': 'gemini-pro',
+      'gemini-2.0-flash': 'gemini-2.0-flash'
     };
   }
 

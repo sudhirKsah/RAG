@@ -4,8 +4,8 @@ import { fileURLToPath } from 'url';
 import { supabase } from '../config/database.js';
 import { ragService } from './ragService.js';
 import { logger } from '../utils/logger.js';
-import pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
+import extractPdfText from 'pdf-text-extract';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -95,35 +95,40 @@ class DocumentService {
     }
   }
 
-  async extractTextContent(file) {
-    try {
-      let text = '';
-      
-      switch (file.mimetype) {
-        case 'application/pdf':
-          const pdfData = await pdfParse(file.buffer);
-          text = pdfData.text;
-          break;
-          
-        case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-          const docxResult = await mammoth.extractRawText({ buffer: file.buffer });
-          text = docxResult.value;
-          break;
-          
-        case 'text/plain':
-          text = file.buffer.toString('utf-8');
-          break;
-          
-        default:
-          throw new Error(`Unsupported file type: ${file.mimetype}`);
-      }
-      
-      return text.trim();
-    } catch (error) {
-      logger.error('Error extracting text content:', error);
-      throw new Error('Failed to extract text from document');
+async extractTextContent(file) {
+  try {
+    let text = '';
+    
+    switch (file.mimetype) {
+      case 'application/pdf':
+        text = await new Promise((resolve, reject) => {
+          extractPdfText(file.buffer, { splitPages: false }, (err, pages) => {
+            if (err) return reject(err);
+            resolve(pages.join('\n'));
+          });
+        });
+        break;
+
+      case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+        const docxResult = await mammoth.extractRawText({ buffer: file.buffer });
+        text = docxResult.value;
+        break;
+
+      case 'text/plain':
+        text = file.buffer.toString('utf-8');
+        break;
+
+      default:
+        throw new Error(`Unsupported file type: ${file.mimetype}`);
     }
+
+    return text.trim();
+  } catch (error) {
+    logger.error('Error extracting text content:', error);
+    throw new Error('Failed to extract text from document');
   }
+}
+
 
   async processDocument(file, companyId, userId) {
     try {

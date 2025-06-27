@@ -1,6 +1,7 @@
 import express from 'express';
 import multer from 'multer';
 import { documentService } from '../services/documentService.js';
+import { supabase } from '../config/database.js';
 import { logger } from '../utils/logger.js';
 import { validateRequest } from '../middleware/validation.js';
 import { documentSchemas } from '../schemas/documentSchemas.js';

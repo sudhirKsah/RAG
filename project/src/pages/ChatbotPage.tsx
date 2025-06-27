@@ -129,11 +129,12 @@ export const ChatbotPage: React.FC = () => {
         setChatbotId(result.data.chatbot.id);
         toast.success('New chatbot created successfully!');
       } else {
-        throw new Error('Failed to create chatbot');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to create chatbot');
       }
     } catch (error) {
       console.error('Error creating chatbot:', error);
-      toast.error('Failed to create chatbot');
+      toast.error(`Failed to create chatbot: ${error.message}`);
     }
   };
 
@@ -169,11 +170,12 @@ export const ChatbotPage: React.FC = () => {
           return updated;
         });
       } else {
-        throw new Error('Failed to save chatbot settings');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to save chatbot settings');
       }
     } catch (error) {
       console.error('Error saving chatbot:', error);
-      toast.error('Failed to save chatbot settings');
+      toast.error(`Failed to save chatbot settings: ${error.message}`);
     } finally {
       setIsSaving(false);
     }
@@ -228,7 +230,7 @@ export const ChatbotPage: React.FC = () => {
       
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        content: response.response,
+        content: response.response || 'Sorry, I encountered an error. Please try again.',
         isBot: true,
         timestamp: new Date()
       };
@@ -243,7 +245,7 @@ export const ChatbotPage: React.FC = () => {
         timestamp: new Date()
       };
       setChatMessages(prev => [...prev, errorMessage]);
-      toast.error('Failed to send message');
+      toast.error(`Failed to send message: ${error.message}`);
     } finally {
       setIsSendingMessage(false);
     }

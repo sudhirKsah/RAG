@@ -15,6 +15,7 @@ export class AIService {
       'gpt-4': 'gpt-4',
       'gpt-3.5-turbo': 'gpt-3.5-turbo',
       'gemini-pro': 'gemini-pro',
+      'gemini-1.5-flash': 'gemini-1.5-flash',
       'gemini-2.0-flash': 'gemini-1.5-flash'
     };
   }
@@ -32,12 +33,7 @@ export class AIService {
     } catch (error) {
       logger.error('OpenAI embeddings failed:', error.message);
       
-      // If OpenAI fails, throw error instead of falling back to incompatible models
-      if (error.code === 'insufficient_quota') {
-        throw new Error('OpenAI quota exceeded. Please check your API quota and billing.');
-      }
-      
-      // For other errors, use the simple embedding fallback that matches 1536 dimensions
+      // Always use simple embedding fallback for any OpenAI error
       logger.warn('Using simple embedding fallback due to OpenAI failure');
       return this.generateSimpleEmbedding(text);
     }
@@ -83,7 +79,7 @@ export class AIService {
             { role: 'system', content: systemPrompt },
             ...messages
           ];
-          return await this.generateGeminiResponse('gemini-2.0-flash', fullMessages);
+          return await this.generateGeminiResponse('gemini-1.5-flash', fullMessages);
         } catch (fallbackError) {
           logger.error('Fallback to Gemini also failed:', fallbackError);
           throw new Error('All AI services failed');
@@ -242,7 +238,7 @@ Use this information to answer the user's question accurately.`;
         } catch (error) {
           if (error.code === 'insufficient_quota') {
             logger.warn('OpenAI quota exceeded, falling back to Gemini streaming');
-            return await this.generateGeminiStreamResponse('gemini-2.0-flash', fullMessages);
+            return await this.generateGeminiStreamResponse('gemini-1.5-flash', fullMessages);
           }
           throw error;
         }
@@ -264,7 +260,7 @@ Use this information to answer the user's question accurately.`;
           { role: 'system', content: systemPrompt },
           ...messages
         ];
-        return await this.generateGeminiStreamResponse('gemini-2.0-flash', fullMessages);
+        return await this.generateGeminiStreamResponse('gemini-1.5-flash', fullMessages);
       } catch (fallbackError) {
         logger.error('All streaming methods failed:', fallbackError);
         throw new Error('Failed to generate stream response');

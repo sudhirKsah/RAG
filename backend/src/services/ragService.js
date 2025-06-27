@@ -73,8 +73,10 @@ export class RAGService {
         }
       );
 
-      // Extract and format relevant context
-      const context = results
+      // Ensure results is an array and extract relevant context
+      const resultsArray = Array.isArray(results) ? results : [];
+      
+      const context = resultsArray
         .filter(result => result.$similarity > 0.7) // Filter by similarity threshold
         .map(result => ({
           content: result.content,
@@ -97,8 +99,11 @@ export class RAGService {
       // Search for relevant context
       const relevantContext = await this.searchRelevantContext(companyId, query);
       
+      // Ensure relevantContext is an array before calling map
+      const contextArray = Array.isArray(relevantContext) ? relevantContext : [];
+      
       // Build context string
-      const contextString = relevantContext
+      const contextString = contextArray
         .map(ctx => ctx.content)
         .join('\n\n');
 
@@ -118,7 +123,7 @@ export class RAGService {
 
       return {
         response: response.content,
-        context_used: relevantContext,
+        context_used: contextArray,
         usage: response.usage,
         model_used: model,
         language: language

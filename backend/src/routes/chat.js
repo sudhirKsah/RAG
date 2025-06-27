@@ -29,14 +29,28 @@ router.post('/:chatbotId', validateRequest(chatSchemas.chatMessage), async (req,
       });
     }
 
-    // Generate RAG response
-    const response = await ragService.generateRAGResponse(
-      chatbot.company_id,
-      message,
-      chatbot.ai_model,
-      language,
-      conversation_history
-    );
+    // Generate RAG response with fallback handling
+    let response;
+    try {
+      response = await ragService.generateRAGResponse(
+        chatbot.company_id,
+        message,
+        chatbot.ai_model,
+        language,
+        conversation_history
+      );
+    } catch (error) {
+      logger.error('RAG service error, falling back to Gemini 2.0 Flash:', error);
+      
+      // Fallback to Gemini 2.0 Flash
+      response = await ragService.generateRAGResponse(
+        chatbot.company_id,
+        message,
+        'gemini-2.0-flash',
+        language,
+        conversation_history
+      );
+    }
 
     // Log conversation
     await logConversation({
@@ -131,28 +145,49 @@ router.post('/:chatbotId/stream', validateRequest(chatSchemas.chatMessage), asyn
       { role: 'user', content: message }
     ];
 
-    // Generate streaming response
-    const stream = await aiService.generateStreamResponse(
-      chatbot.ai_model,
-      messages,
-      contextString,
-      language
-    );
+    // Generate streaming response with fallback
+    let stream;
+    let modelUsed = chatbot.ai_model;
+    
+    try {
+      stream = await aiService.generateStreamResponse(
+        chatbot.ai_model,
+        messages,
+        contextString,
+        language
+      );
+    } catch (error) {
+      logger.error('Primary model failed, falling back to Gemini 2.0 Flash:', error);
+      
+      // Fallback to Gemini 2.0 Flash
+      modelUsed = 'gemini-2.0-flash';
+      stream = await aiService.generateStreamResponse(
+        'gemini-2.0-flash',
+        messages,
+        contextString,
+        language
+      );
+    }
 
     let fullResponse = '';
 
     if (stream && typeof stream[Symbol.asyncIterator] === 'function') {
       // Handle streaming response
-      for await (const chunk of stream) {
-        const content = chunk.choices[0]?.delta?.content || '';
-        if (content) {
-          fullResponse += content;
-          res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
+      try {
+        for await (const chunk of stream) {
+          const content = chunk.choices[0]?.delta?.content || '';
+          if (content) {
+            fullResponse += content;
+            res.write(`data: ${JSON.stringify({ content, done: false })}\n\n`);
+          }
         }
+      } catch (streamError) {
+        logger.error('Streaming error:', streamError);
+        res.write(`data: ${JSON.stringify({ error: 'Streaming interrupted' })}\n\n`);
       }
     } else {
       // Handle non-streaming response
-      fullResponse = stream.response || stream.content;
+      fullResponse = stream.response || stream.content || '';
       res.write(`data: ${JSON.stringify({ content: fullResponse, done: false })}\n\n`);
     }
 
@@ -167,7 +202,7 @@ router.post('/:chatbotId/stream', validateRequest(chatSchemas.chatMessage), asyn
       user_message: message,
       bot_response: fullResponse,
       language,
-      model_used: chatbot.ai_model,
+      model_used: modelUsed,
       context_used: relevantContext.length > 0,
       response_time: Date.now() - req.startTime
     });

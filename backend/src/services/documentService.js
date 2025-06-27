@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { supabase } from '../config/database.js';
 import { ragService } from './ragService.js';
 import { logger } from '../utils/logger.js';
+import { retryWithBackoff } from '../utils/helpers.js';
 import mammoth from 'mammoth';
 import extractPdfText from 'pdf-text-extract';
 
@@ -64,18 +65,24 @@ class DocumentService {
 
       const fileName = `${companyId}/${Date.now()}-${file.originalname}`;
       
-      // Upload to Supabase Storage
-      const { data, error } = await supabase.storage
-        .from('documents')
-        .upload(fileName, file.buffer, {
-          contentType: file.mimetype,
-          upsert: false
-        });
+      // Upload to Supabase Storage with retry
+      const uploadOperation = async () => {
+        const { data, error } = await supabase.storage
+          .from('documents')
+          .upload(fileName, file.buffer, {
+            contentType: file.mimetype,
+            upsert: false
+          });
 
-      if (error) {
-        logger.error('Error uploading to storage:', error);
-        throw new Error('Failed to upload file to storage');
-      }
+        if (error) {
+          logger.error('Error uploading to storage:', error);
+          throw new Error('Failed to upload file to storage');
+        }
+
+        return data;
+      };
+
+      const data = await retryWithBackoff(uploadOperation, 3, 1000);
 
       // Get public URL
       const { data: urlData } = supabase.storage
@@ -95,40 +102,39 @@ class DocumentService {
     }
   }
 
-async extractTextContent(file) {
-  try {
-    let text = '';
-    
-    switch (file.mimetype) {
-      case 'application/pdf':
-        text = await new Promise((resolve, reject) => {
-          extractPdfText(file.buffer, { splitPages: false }, (err, pages) => {
-            if (err) return reject(err);
-            resolve(pages.join('\n'));
+  async extractTextContent(file) {
+    try {
+      let text = '';
+      
+      switch (file.mimetype) {
+        case 'application/pdf':
+          text = await new Promise((resolve, reject) => {
+            extractPdfText(file.buffer, { splitPages: false }, (err, pages) => {
+              if (err) return reject(err);
+              resolve(pages.join('\n'));
+            });
           });
-        });
-        break;
+          break;
 
-      case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
-        const docxResult = await mammoth.extractRawText({ buffer: file.buffer });
-        text = docxResult.value;
-        break;
+        case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+          const docxResult = await mammoth.extractRawText({ buffer: file.buffer });
+          text = docxResult.value;
+          break;
 
-      case 'text/plain':
-        text = file.buffer.toString('utf-8');
-        break;
+        case 'text/plain':
+          text = file.buffer.toString('utf-8');
+          break;
 
-      default:
-        throw new Error(`Unsupported file type: ${file.mimetype}`);
+        default:
+          throw new Error(`Unsupported file type: ${file.mimetype}`);
+      }
+
+      return text.trim();
+    } catch (error) {
+      logger.error('Error extracting text content:', error);
+      throw new Error('Failed to extract text from document');
     }
-
-    return text.trim();
-  } catch (error) {
-    logger.error('Error extracting text content:', error);
-    throw new Error('Failed to extract text from document');
   }
-}
-
 
   async processDocument(file, companyId, userId) {
     try {
@@ -138,28 +144,34 @@ async extractTextContent(file) {
       // Extract text content
       const textContent = await this.extractTextContent(file);
       
-      // Store document metadata in database
-      const { data: document, error } = await supabase
-        .from('documents')
-        .insert({
-          company_id: companyId,
-          user_id: userId,
-          filename: fileData.fileName,
-          file_type: file.mimetype.split('/')[1] || 'unknown',
-          file_size: fileData.fileSize,
-          content_length: textContent.length,
-          file_url: fileData.fileUrl,
-          status: 'processing',
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .select()
-        .single();
+      // Store document metadata in database with retry
+      const insertOperation = async () => {
+        const { data: document, error } = await supabase
+          .from('documents')
+          .insert({
+            company_id: companyId,
+            user_id: userId,
+            filename: fileData.fileName,
+            file_type: file.mimetype.split('/')[1] || 'unknown',
+            file_size: fileData.fileSize,
+            content_length: textContent.length,
+            file_url: fileData.fileUrl,
+            status: 'processing',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .select()
+          .single();
 
-      if (error) {
-        logger.error('Error storing document metadata:', error);
-        throw new Error('Failed to store document metadata');
-      }
+        if (error) {
+          logger.error('Error storing document metadata:', error);
+          throw new Error('Failed to store document metadata');
+        }
+
+        return document;
+      };
+
+      const document = await retryWithBackoff(insertOperation, 3, 1000);
 
       // Process with RAG service in background
       try {
@@ -175,28 +187,48 @@ async extractTextContent(file) {
           }
         );
 
-        // Update document status
-        await supabase
-          .from('documents')
-          .update({
-            status: 'processed',
-            chunk_count: chunkCount,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', document.id);
+        // Update document status with retry
+        const updateOperation = async () => {
+          const { error } = await supabase
+            .from('documents')
+            .update({
+              status: 'processed',
+              chunk_count: chunkCount,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', document.id);
+
+          if (error) {
+            throw new Error('Failed to update document status');
+          }
+        };
+
+        await retryWithBackoff(updateOperation, 3, 1000);
 
         logger.info(`Document processed successfully: ${fileData.fileName}`);
       } catch (ragError) {
         logger.error('Error processing with RAG:', ragError);
         
-        // Update document status to failed
-        await supabase
-          .from('documents')
-          .update({
-            status: 'failed',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', document.id);
+        // Update document status to failed with retry
+        try {
+          const updateFailedOperation = async () => {
+            const { error } = await supabase
+              .from('documents')
+              .update({
+                status: 'failed',
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', document.id);
+
+            if (error) {
+              throw new Error('Failed to update document status to failed');
+            }
+          };
+
+          await retryWithBackoff(updateFailedOperation, 3, 1000);
+        } catch (updateError) {
+          logger.error('Failed to update document status to failed:', updateError);
+        }
       }
 
       return document;
@@ -208,19 +240,23 @@ async extractTextContent(file) {
 
   async getDocuments(companyId, limit = 50, offset = 0) {
     try {
-      const { data, error } = await supabase
-        .from('documents')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1);
+      const getOperation = async () => {
+        const { data, error } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false })
+          .range(offset, offset + limit - 1);
 
-      if (error) {
-        logger.error('Error fetching documents:', error);
-        throw new Error('Failed to fetch documents');
-      }
+        if (error) {
+          logger.error('Error fetching documents:', error);
+          throw new Error('Failed to fetch documents');
+        }
 
-      return data || [];
+        return data || [];
+      };
+
+      return await retryWithBackoff(getOperation, 3, 1000);
     } catch (error) {
       logger.error('Error in getDocuments:', error);
       throw error;
@@ -229,16 +265,33 @@ async extractTextContent(file) {
 
   async deleteDocument(documentId, companyId) {
     try {
-      // Get document details first
-      const { data: document, error: fetchError } = await supabase
-        .from('documents')
-        .select('*')
-        .eq('id', documentId)
-        .eq('company_id', companyId)
-        .single();
+      // Get document details first with retry
+      const fetchOperation = async () => {
+        const { data: document, error: fetchError } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .single();
 
-      if (fetchError || !document) {
-        throw new Error('Document not found');
+        if (fetchError) {
+          if (fetchError.code === 'PGRST116') {
+            // Document not found in database
+            logger.warn(`Document ${documentId} not found in database, may have been already deleted`);
+            return null;
+          }
+          throw fetchError;
+        }
+
+        return document;
+      };
+
+      const document = await retryWithBackoff(fetchOperation, 3, 1000);
+
+      if (!document) {
+        // Document doesn't exist in database, consider it already deleted
+        logger.info(`Document ${documentId} not found in database, considering it deleted`);
+        return { success: true, message: 'Document not found in database' };
       }
 
       // Delete from RAG service
@@ -249,30 +302,44 @@ async extractTextContent(file) {
         // Continue with deletion even if RAG deletion fails
       }
 
-      // Delete from storage
+      // Delete from storage with retry
       if (document.file_url) {
-        const fileName = document.file_url.split('/').pop();
-        const { error: storageError } = await supabase.storage
-          .from('documents')
-          .remove([`${companyId}/${fileName}`]);
+        try {
+          const filePath = document.file_url.split('/').slice(-2).join('/');
+          
+          const storageDeleteOperation = async () => {
+            const { error: storageError } = await supabase.storage
+              .from('documents')
+              .remove([filePath]);
 
-        if (storageError) {
-          logger.error('Error deleting from storage:', storageError);
+            if (storageError) {
+              logger.error('Error deleting from storage:', storageError);
+              throw storageError;
+            }
+          };
+
+          await retryWithBackoff(storageDeleteOperation, 3, 1000);
+        } catch (storageError) {
+          logger.error('Failed to delete from storage after retries:', storageError);
           // Continue with database deletion even if storage deletion fails
         }
       }
 
-      // Delete from database
-      const { error: dbError } = await supabase
-        .from('documents')
-        .delete()
-        .eq('id', documentId)
-        .eq('company_id', companyId);
+      // Delete from database with retry
+      const dbDeleteOperation = async () => {
+        const { error: dbError } = await supabase
+          .from('documents')
+          .delete()
+          .eq('id', documentId)
+          .eq('company_id', companyId);
 
-      if (dbError) {
-        logger.error('Error deleting from database:', dbError);
-        throw new Error('Failed to delete document from database');
-      }
+        if (dbError) {
+          logger.error('Error deleting from database:', dbError);
+          throw new Error('Failed to delete document from database');
+        }
+      };
+
+      await retryWithBackoff(dbDeleteOperation, 3, 1000);
 
       logger.info(`Document deleted successfully: ${document.filename}`);
       return { success: true };
@@ -284,35 +351,55 @@ async extractTextContent(file) {
 
   async reprocessDocument(documentId, companyId) {
     try {
-      // Get document details
-      const { data: document, error: fetchError } = await supabase
-        .from('documents')
-        .select('*')
-        .eq('id', documentId)
-        .eq('company_id', companyId)
-        .single();
+      // Get document details with retry
+      const fetchOperation = async () => {
+        const { data: document, error: fetchError } = await supabase
+          .from('documents')
+          .select('*')
+          .eq('id', documentId)
+          .eq('company_id', companyId)
+          .single();
 
-      if (fetchError || !document) {
-        throw new Error('Document not found');
-      }
+        if (fetchError || !document) {
+          throw new Error('Document not found');
+        }
 
-      // Update status to processing
-      await supabase
-        .from('documents')
-        .update({
-          status: 'processing',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
+        return document;
+      };
 
-      // Download file from storage and reprocess
-      const { data: fileData, error: downloadError } = await supabase.storage
-        .from('documents')
-        .download(document.file_url.split('/').slice(-2).join('/'));
+      const document = await retryWithBackoff(fetchOperation, 3, 1000);
 
-      if (downloadError) {
-        throw new Error('Failed to download file for reprocessing');
-      }
+      // Update status to processing with retry
+      const updateProcessingOperation = async () => {
+        const { error } = await supabase
+          .from('documents')
+          .update({
+            status: 'processing',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', documentId);
+
+        if (error) {
+          throw new Error('Failed to update status to processing');
+        }
+      };
+
+      await retryWithBackoff(updateProcessingOperation, 3, 1000);
+
+      // Download file from storage and reprocess with retry
+      const downloadOperation = async () => {
+        const { data: fileData, error: downloadError } = await supabase.storage
+          .from('documents')
+          .download(document.file_url.split('/').slice(-2).join('/'));
+
+        if (downloadError) {
+          throw new Error('Failed to download file for reprocessing');
+        }
+
+        return fileData;
+      };
+
+      const fileData = await retryWithBackoff(downloadOperation, 3, 1000);
 
       // Create file object for reprocessing
       const file = {
@@ -342,30 +429,50 @@ async extractTextContent(file) {
         }
       );
 
-      // Update document status
-      await supabase
-        .from('documents')
-        .update({
-          status: 'processed',
-          chunk_count: chunkCount,
-          content_length: textContent.length,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
+      // Update document status with retry
+      const updateSuccessOperation = async () => {
+        const { error } = await supabase
+          .from('documents')
+          .update({
+            status: 'processed',
+            chunk_count: chunkCount,
+            content_length: textContent.length,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', documentId);
+
+        if (error) {
+          throw new Error('Failed to update document status');
+        }
+      };
+
+      await retryWithBackoff(updateSuccessOperation, 3, 1000);
 
       logger.info(`Document reprocessed successfully: ${document.filename}`);
       return { success: true };
     } catch (error) {
       logger.error('Error reprocessing document:', error);
       
-      // Update status to failed
-      await supabase
-        .from('documents')
-        .update({
-          status: 'failed',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', documentId);
+      // Update status to failed with retry
+      try {
+        const updateFailedOperation = async () => {
+          const { error } = await supabase
+            .from('documents')
+            .update({
+              status: 'failed',
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', documentId);
+
+          if (error) {
+            throw new Error('Failed to update status to failed');
+          }
+        };
+
+        await retryWithBackoff(updateFailedOperation, 3, 1000);
+      } catch (updateError) {
+        logger.error('Failed to update status to failed:', updateError);
+      }
       
       throw error;
     }
@@ -373,15 +480,21 @@ async extractTextContent(file) {
 
   async getDocumentStats(companyId) {
     try {
-      const { data: documents, error } = await supabase
-        .from('documents')
-        .select('status, file_size, chunk_count')
-        .eq('company_id', companyId);
+      const getStatsOperation = async () => {
+        const { data: documents, error } = await supabase
+          .from('documents')
+          .select('status, file_size, chunk_count')
+          .eq('company_id', companyId);
 
-      if (error) {
-        logger.error('Error fetching document stats:', error);
-        throw new Error('Failed to fetch document stats');
-      }
+        if (error) {
+          logger.error('Error fetching document stats:', error);
+          throw new Error('Failed to fetch document stats');
+        }
+
+        return documents;
+      };
+
+      const documents = await retryWithBackoff(getStatsOperation, 3, 1000);
 
       const stats = {
         total_documents: documents.length,

@@ -45,7 +45,7 @@ interface ChatMessage {
 
 export const ChatbotPage: React.FC = () => {
   const [chatbotId, setChatbotId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState('gpt-4');
+  const [selectedModel, setSelectedModel] = useState('gpt-3.5-turbo');
   const [selectedLanguages, setSelectedLanguages] = useState(['en']);
   const [companyName, setCompanyName] = useState('Your Company');
   const [welcomeMessage, setWelcomeMessage] = useState('Hi! How can I help you today?');
@@ -59,6 +59,7 @@ export const ChatbotPage: React.FC = () => {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [currentMessage, setCurrentMessage] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
+  const [sessionId] = useState(`session_${Date.now()}`);
 
   // Load existing chatbot data on component mount
   useEffect(() => {
@@ -80,30 +81,28 @@ export const ChatbotPage: React.FC = () => {
   const loadChatbotData = async () => {
     try {
       setIsLoading(true);
-      const chatbots = await api.getChatbots();
+      const response = await api.getChatbots();
       
-      if (chatbots.length > 0) {
-        // Load existing chatbot
-        const chatbot = chatbots[0];
-        setChatbotId(chatbot.id);
-        setCompanyName(chatbot.name || 'Your Company');
-        setSelectedModel(chatbot.model || 'gpt-4');
-        setWelcomeMessage(chatbot.welcome_message || 'Hi! How can I help you today?');
-        setPrimaryColor(chatbot.primary_color || '#2563eb');
-        setSelectedLanguages(chatbot.supported_languages || ['en']);
-        setLogo(chatbot.logo_url || null);
+      if (response.ok) {
+        const result = await response.json();
+        const chatbots = result.data.chatbots;
+        
+        if (chatbots.length > 0) {
+          // Load existing chatbot
+          const chatbot = chatbots[0];
+          setChatbotId(chatbot.id);
+          setCompanyName(chatbot.name || 'Your Company');
+          setSelectedModel(chatbot.ai_model || 'gpt-3.5-turbo');
+          setWelcomeMessage(chatbot.welcome_message || 'Hi! How can I help you today?');
+          setPrimaryColor(chatbot.primary_color || '#2563eb');
+          setSelectedLanguages(chatbot.supported_languages || ['en']);
+          setLogo(chatbot.logo_url || null);
+        } else {
+          // Create new chatbot
+          await createNewChatbot();
+        }
       } else {
-        // Create new chatbot
-        const newChatbot = await api.createChatbot({
-          name: companyName,
-          model: selectedModel,
-          welcome_message: welcomeMessage,
-          primary_color: primaryColor,
-          supported_languages: selectedLanguages,
-          logo_url: logo
-        });
-        setChatbotId(newChatbot.id);
-        toast.success('New chatbot created successfully!');
+        throw new Error('Failed to load chatbots');
       }
     } catch (error) {
       console.error('Error loading chatbot data:', error);
@@ -113,36 +112,64 @@ export const ChatbotPage: React.FC = () => {
     }
   };
 
+  const createNewChatbot = async () => {
+    try {
+      const response = await api.createChatbot({
+        name: companyName,
+        ai_model: selectedModel,
+        welcome_message: welcomeMessage,
+        primary_color: primaryColor,
+        supported_languages: selectedLanguages,
+        logo_url: logo || ''
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setChatbotId(result.data.chatbot.id);
+        toast.success('New chatbot created successfully!');
+      } else {
+        throw new Error('Failed to create chatbot');
+      }
+    } catch (error) {
+      console.error('Error creating chatbot:', error);
+      toast.error('Failed to create chatbot');
+    }
+  };
+
   const handleSaveChanges = async () => {
     if (!chatbotId) {
-      toast.error('No chatbot to save');
+      await createNewChatbot();
       return;
     }
 
     try {
       setIsSaving(true);
-      await api.updateChatbot(chatbotId, {
+      const response = await api.updateChatbot(chatbotId, {
         name: companyName,
-        model: selectedModel,
+        ai_model: selectedModel,
         welcome_message: welcomeMessage,
         primary_color: primaryColor,
         supported_languages: selectedLanguages,
-        logo_url: logo
+        logo_url: logo || ''
       });
       
-      toast.success('Chatbot settings saved successfully!');
-      
-      // Update the welcome message in chat if it changed
-      setChatMessages(prev => {
-        const updated = [...prev];
-        if (updated.length > 0 && updated[0].isBot) {
-          updated[0] = {
-            ...updated[0],
-            content: welcomeMessage
-          };
-        }
-        return updated;
-      });
+      if (response.ok) {
+        toast.success('Chatbot settings saved successfully!');
+        
+        // Update the welcome message in chat if it changed
+        setChatMessages(prev => {
+          const updated = [...prev];
+          if (updated.length > 0 && updated[0].isBot) {
+            updated[0] = {
+              ...updated[0],
+              content: welcomeMessage
+            };
+          }
+          return updated;
+        });
+      } else {
+        throw new Error('Failed to save chatbot settings');
+      }
     } catch (error) {
       console.error('Error saving chatbot:', error);
       toast.error('Failed to save chatbot settings');
@@ -183,15 +210,24 @@ export const ChatbotPage: React.FC = () => {
     };
 
     setChatMessages(prev => [...prev, userMessage]);
+    const messageToSend = currentMessage;
     setCurrentMessage('');
     setIsSendingMessage(true);
 
     try {
-      const response = await api.sendMessage(chatbotId, currentMessage);
+      const response = await api.sendMessage(chatbotId, {
+        message: messageToSend,
+        language: selectedLanguages[0] || 'en',
+        session_id: sessionId,
+        conversation_history: chatMessages.slice(-10).map(msg => ({
+          role: msg.isBot ? 'assistant' : 'user',
+          content: msg.content
+        }))
+      });
       
       const botMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
-        content: response.message,
+        content: response.response,
         isBot: true,
         timestamp: new Date()
       };
@@ -262,7 +298,7 @@ export const ChatbotPage: React.FC = () => {
             </button>
             <button 
               onClick={handleSaveChanges}
-              disabled={isSaving || !chatbotId}
+              disabled={isSaving}
               className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSaving ? (

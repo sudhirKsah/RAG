@@ -12,27 +12,63 @@ class RAGService {
 
   // Chunk text into smaller pieces for better embedding
   chunkText(text, chunkSize = this.chunkSize, overlap = this.chunkOverlap) {
+    console.log(`inside chunkText function, text length: ${text.length}, chunkSize: ${chunkSize}, overlap: ${overlap}`);
+    console.log(`Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
+    
+    if (chunkSize <= 0 || overlap < 0 || overlap >= chunkSize) {
+      console.error(`Invalid chunk parameters: chunkSize=${chunkSize}, overlap=${overlap}`);
+      throw new Error('Invalid chunkSize or overlap values');
+    }
+  
+    const graphemes = [...text];
+    console.log(`Grapheme count: ${graphemes.length}`);
+    
     const chunks = [];
     let start = 0;
-
-    while (start < text.length) {
-      const end = Math.min(start + chunkSize, text.length);
-      const chunk = text.slice(start, end);
+    let iteration = 0;
+    const maxIterations = Math.ceil(graphemes.length / (chunkSize - overlap)) + 1;
+  
+    while (start < graphemes.length) {
+      console.log(`Iteration ${iteration}: start=${start}, grapheme length=${graphemes.length}`);
+      const end = Math.min(start + chunkSize, graphemes.length);
+      console.log(`  end=${end}`);
+      const chunk = graphemes.slice(start, end).join('');
       
       if (chunk.trim()) {
+        console.log(`  Adding chunk of length ${chunk.length}`);
         chunks.push(chunk.trim());
       }
       
-      start = end - overlap;
-      if (start >= text.length) break;
+      if (graphemes.length - start <= chunkSize) {
+        console.log(`  Remaining text too small, breaking loop`);
+        break;
+      }
+      
+      start = Math.max(end - overlap, start + 1);
+      console.log(`  New start=${start}`);
+      console.log(`  Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
+      
+      iteration++;
+      if (iteration > maxIterations) {
+        console.error(`Infinite loop detected in chunkText. Aborting after ${iteration} iterations.`);
+        throw new Error(`Infinite loop detected in chunkText`);
+      }
+      
+      if (start >= graphemes.length) {
+        console.log(`  Breaking loop: start=${start} >= grapheme length=${graphemes.length}`);
+        break;
+      }
     }
-
+    
+    console.log(`leaving chunkText function, created ${chunks.length} chunks`);
+    console.log(`Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
     return chunks.length > 0 ? chunks : [text];
   }
 
   // Store document chunks with embeddings
   async storeDocumentChunks(companyId, documentId, chunks, metadata = {}) {
     try {
+      console.log("inside storeDocumentChunks function");
       const collection = astraDB.collection(this.collectionName);
       let successCount = 0;
 

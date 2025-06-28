@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 import { retryWithBackoff } from '../utils/helpers.js';
 import mammoth from 'mammoth';
 import extractPdfText from 'pdf-text-extract';
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,14 +30,14 @@ class DocumentService {
     try {
       // Check if bucket exists
       const { data: buckets, error: listError } = await supabase.storage.listBuckets();
-      
+
       if (listError) {
         logger.error('Error listing buckets:', listError);
         throw new Error('Failed to check storage buckets');
       }
 
       const bucketExists = buckets.some(bucket => bucket.name === 'documents');
-      
+
       if (!bucketExists) {
         // Create the bucket
         const { data, error: createError } = await supabase.storage.createBucket('documents', {
@@ -64,7 +65,7 @@ class DocumentService {
       await this.ensureStorageBucket();
 
       const fileName = `${companyId}/${Date.now()}-${file.originalname}`;
-      
+
       // Upload to Supabase Storage with retry
       const uploadOperation = async () => {
         const { data, error } = await supabase.storage
@@ -105,15 +106,11 @@ class DocumentService {
   async extractTextContent(file) {
     try {
       let text = '';
-      
+
       switch (file.mimetype) {
         case 'application/pdf':
-          text = await new Promise((resolve, reject) => {
-            extractPdfText(file.buffer, { splitPages: false }, (err, pages) => {
-              if (err) return reject(err);
-              resolve(pages.join('\n'));
-            });
-          });
+          const pdfData = await pdfParse(file.buffer);
+          text = pdfData.text;
           break;
 
         case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
@@ -140,10 +137,12 @@ class DocumentService {
     try {
       // Upload file to storage
       const fileData = await this.uploadToStorage(file, companyId);
-      
+
       // Extract text content
       const textContent = await this.extractTextContent(file);
-      
+
+      console.log(`Extracted text content length: ${textContent.length}`);
+
       // Store document metadata in database with retry
       const insertOperation = async () => {
         const { data: document, error } = await supabase
@@ -166,6 +165,8 @@ class DocumentService {
         if (error) {
           logger.error('Error storing document metadata:', error);
           throw new Error('Failed to store document metadata');
+        } else{
+          console.log('document saved successfully:', document);
         }
 
         return document;
@@ -208,7 +209,7 @@ class DocumentService {
         logger.info(`Document processed successfully: ${fileData.fileName}`);
       } catch (ragError) {
         logger.error('Error processing with RAG:', ragError);
-        
+
         // Update document status to failed with retry
         try {
           const updateFailedOperation = async () => {
@@ -306,7 +307,7 @@ class DocumentService {
       if (document.file_url) {
         try {
           const filePath = document.file_url.split('/').slice(-2).join('/');
-          
+
           const storageDeleteOperation = async () => {
             const { error: storageError } = await supabase.storage
               .from('documents')
@@ -404,18 +405,18 @@ class DocumentService {
       // Create file object for reprocessing
       const file = {
         buffer: Buffer.from(await fileData.arrayBuffer()),
-        mimetype: document.file_type === 'pdf' ? 'application/pdf' : 
-                 document.file_type === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
-                 'text/plain',
+        mimetype: document.file_type === 'pdf' ? 'application/pdf' :
+          document.file_type === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+            'text/plain',
         originalname: document.filename
       };
 
       // Extract text and reprocess
       const textContent = await this.extractTextContent(file);
-      
+
       // Delete old chunks
       await ragService.deleteDocumentChunks(companyId, documentId);
-      
+
       // Create new chunks
       const chunks = ragService.chunkText(textContent);
       const chunkCount = await ragService.storeDocumentChunks(
@@ -452,7 +453,7 @@ class DocumentService {
       return { success: true };
     } catch (error) {
       logger.error('Error reprocessing document:', error);
-      
+
       // Update status to failed with retry
       try {
         const updateFailedOperation = async () => {
@@ -473,7 +474,7 @@ class DocumentService {
       } catch (updateError) {
         logger.error('Failed to update status to failed:', updateError);
       }
-      
+
       throw error;
     }
   }

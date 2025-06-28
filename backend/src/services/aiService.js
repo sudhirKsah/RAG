@@ -16,25 +16,97 @@ export class AIService {
       'gpt-3.5-turbo': 'gpt-3.5-turbo',
       'gemini-pro': 'gemini-pro',
       'gemini-1.5-flash': 'gemini-1.5-flash',
-      'gemini-2.0-flash': 'gemini-1.5-flash'
+      'gemini-2.0-flash': 'gemini-2.0-flash'
     };
   }
 
   // Generate embeddings using OpenAI only (to maintain 1536 dimensions)
+  // async generateEmbeddings(text) {
+  //   try {
+  //     console.log("inside generateEmbeddings function");
+  //     // Only use OpenAI for embeddings to ensure consistent 1536 dimensions
+  //     const response = await openai.embeddings.create({
+  //       model: 'text-embedding-3-small',
+  //       input: text,
+  //     });
+
+  //     return response.data[0].embedding;
+  //   } catch (error) {
+  //     logger.error('OpenAI embeddings failed:', error.message);
+
+  //     // Always use simple embedding fallback for any OpenAI error
+  //     logger.warn('Using simple embedding fallback due to OpenAI failure');
+  //     return this.generateSimpleEmbedding(text);
+  //   }
+  // }
+
   async generateEmbeddings(text) {
     try {
-      // Only use OpenAI for embeddings to ensure consistent 1536 dimensions
-      const response = await openai.embeddings.create({
-        model: 'text-embedding-3-small',
-        input: text,
-      });
+      console.log("inside generateEmbeddings function");
+      if (!text || typeof text !== 'string' || text.length === 0) {
+        throw new Error('Invalid input: text must be a non-empty string');
+      }
+      if (text.length > 8192) {
+        console.warn('Text input truncated to 8192 characters for embedding');
+        text = text.slice(0, 8192);
+      }
 
-      return response.data[0].embedding;
+      // const maxRetries = 3;
+      // let lastError = null;
+
+      // for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await openai.embeddings.create({
+          model: 'text-embedding-3-small',
+          input: text,
+        });
+        console.log('OpenAI embedding generated successfully');
+        return response.data[0].embedding;
+      } catch (error) {
+        // lastError = error;
+        // logger.warn(`OpenAI attempt ${attempt} failed:`, {
+        //   message: error.message,
+        //   code: error.code,
+        //   status: error.status,
+        // });
+        //   if (error.code === 'invalid_api_key' || error.status === 401) {
+        //     break;
+        //   }
+        //   if (attempt < maxRetries) {
+        //     const delay = 1000 * Math.pow(2, attempt - 1);
+        //     logger.info(`Retrying OpenAI after ${delay}ms`);
+        //     await new Promise(resolve => setTimeout(resolve, delay));
+        //   }
+        // }
+        // }
+
+        logger.warn('OpenAI failed, attempting Gemini embedding');
+        try {
+          const model = genAI.getGenerativeModel({ model: 'embedding-001' });
+          const result = await model.embedContent(text);
+          console.log('Gemini embedding generated successfully');
+          // return result.embedding.values;
+          const geminiEmbedding = result.embedding.values;
+          const paddedEmbedding = new Array(1536).fill(0);
+          for (let i = 0; i < Math.min(geminiEmbedding.length, 1536); i++) {
+            paddedEmbedding[i] = geminiEmbedding[i];
+          }
+          return paddedEmbedding;
+        } catch (geminiError) {
+          logger.error('Gemini embedding failed:', {
+            message: geminiError.message,
+            details: geminiError,
+          });
+          logger.warn('Using simple embedding fallback due to OpenAI and Gemini failure');
+          return this.generateSimpleEmbedding(text);
+        }
+      }
     } catch (error) {
-      logger.error('OpenAI embeddings failed:', error.message);
-      
-      // Always use simple embedding fallback for any OpenAI error
-      logger.warn('Using simple embedding fallback due to OpenAI failure');
+      logger.error('Unexpected error in generateEmbeddings:', {
+        message: error.message,
+        stack: error.stack,
+      });
+      logger.warn('Using simple embedding fallback due to unexpected error');
       return this.generateSimpleEmbedding(text);
     }
   }
@@ -69,7 +141,7 @@ export class AIService {
       }
     } catch (error) {
       logger.error('Error generating AI response:', error);
-      
+
       // Fallback to Gemini 1.5 Flash if other models fail
       if (!model.startsWith('gemini')) {
         logger.info('Falling back to Gemini 1.5 Flash');
@@ -85,7 +157,7 @@ export class AIService {
           throw new Error('All AI services failed');
         }
       }
-      
+
       throw new Error('Failed to generate response');
     }
   }
@@ -118,20 +190,20 @@ export class AIService {
   async generateGeminiResponse(modelName, messages) {
     try {
       const geminiModel = this.models[modelName] || 'gemini-1.5-flash';
-      const model = genAI.getGenerativeModel({ 
+      const model = genAI.getGenerativeModel({
         model: geminiModel,
         systemInstruction: this._extractSystemInstruction(messages)
       });
-      
+
       const { history, lastUserMessage } = this._convertMessagesToGeminiFormat(messages);
-      
+
       const chat = model.startChat({
         history: history
       });
 
       const result = await chat.sendMessage(lastUserMessage);
       const response = await result.response;
-      
+
       return {
         content: response.text(),
         usage: { total_tokens: 0 } // Gemini doesn't provide token usage
@@ -146,21 +218,21 @@ export class AIService {
   _convertMessagesToGeminiFormat(messages) {
     const history = [];
     let lastUserMessage = '';
-    
+
     // Skip system message as it's handled separately
     const conversationMessages = messages.filter(msg => msg.role !== 'system');
-    
+
     for (let i = 0; i < conversationMessages.length - 1; i += 2) {
       const userMsg = conversationMessages[i];
       const assistantMsg = conversationMessages[i + 1];
-      
+
       if (userMsg && userMsg.role === 'user') {
         history.push({
           role: 'user',
           parts: [{ text: userMsg.content }]
         });
       }
-      
+
       if (assistantMsg && assistantMsg.role === 'assistant') {
         history.push({
           role: 'model',
@@ -168,13 +240,13 @@ export class AIService {
         });
       }
     }
-    
+
     // Get the last user message
     const lastMessage = conversationMessages[conversationMessages.length - 1];
     if (lastMessage && lastMessage.role === 'user') {
       lastUserMessage = lastMessage.content;
     }
-    
+
     return { history, lastUserMessage };
   }
 
@@ -251,7 +323,7 @@ Use this information to answer the user's question accurately.`;
       }
     } catch (error) {
       logger.error('Error generating stream response:', error);
-      
+
       // Final fallback to Gemini 1.5 Flash
       try {
         logger.info('Falling back to Gemini 1.5 Flash streaming');
@@ -272,19 +344,19 @@ Use this information to answer the user's question accurately.`;
   async generateGeminiStreamResponse(modelName, messages) {
     try {
       const geminiModel = this.models[modelName] || 'gemini-1.5-flash';
-      const model = genAI.getGenerativeModel({ 
+      const model = genAI.getGenerativeModel({
         model: geminiModel,
         systemInstruction: this._extractSystemInstruction(messages)
       });
-      
+
       const { history, lastUserMessage } = this._convertMessagesToGeminiFormat(messages);
-      
+
       const chat = model.startChat({
         history: history
       });
 
       const result = await chat.sendMessageStream(lastUserMessage);
-      
+
       // Convert Gemini stream to OpenAI-compatible format
       return this.convertGeminiStreamToOpenAI(result.stream);
     } catch (error) {
@@ -348,12 +420,12 @@ Use this information to answer the user's question accurately.`;
       return response.choices[0].message.content;
     } catch (error) {
       logger.warn('OpenAI translation failed, falling back to Gemini:', error.message);
-      
+
       try {
         // Fallback to Gemini
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         const prompt = `Translate the following text to ${targetLanguage}. Only return the translation, no additional text.\n\nText: ${text}`;
-        
+
         const result = await model.generateContent(prompt);
         const response = await result.response;
         return response.text();
@@ -387,12 +459,12 @@ Use this information to answer the user's question accurately.`;
       return response.choices[0].message.content.trim().toLowerCase();
     } catch (error) {
       logger.warn('OpenAI language detection failed, falling back to Gemini:', error.message);
-      
+
       try {
         // Fallback to Gemini
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         const prompt = `Detect the language of the following text. Return only the language code (e.g., en, es, fr, de, hi, ne, zh, ja).\n\nText: ${text}`;
-        
+
         const result = await model.generateContent(prompt);
         const response = await result.response;
         return response.text().trim().toLowerCase();

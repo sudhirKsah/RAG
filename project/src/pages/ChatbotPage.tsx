@@ -24,6 +24,7 @@ const aiModels = [
   { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', provider: 'OpenAI', description: 'Fast and efficient' },
   { id: 'gemini-pro', name: 'Gemini Pro', provider: 'Google', description: 'Google\'s advanced model' },
   { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', provider: 'Google', description: 'Google\'s fastest model' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', description: 'Google\'s better and fastest model' },
 ];
 
 const languages = [

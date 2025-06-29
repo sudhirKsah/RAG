@@ -14,52 +14,52 @@ class RAGService {
   chunkText(text, chunkSize = this.chunkSize, overlap = this.chunkOverlap) {
     console.log(`inside chunkText function, text length: ${text.length}, chunkSize: ${chunkSize}, overlap: ${overlap}`);
     console.log(`Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
-    
+
     if (chunkSize <= 0 || overlap < 0 || overlap >= chunkSize) {
       console.error(`Invalid chunk parameters: chunkSize=${chunkSize}, overlap=${overlap}`);
       throw new Error('Invalid chunkSize or overlap values');
     }
-  
+
     const graphemes = [...text];
     console.log(`Grapheme count: ${graphemes.length}`);
-    
+
     const chunks = [];
     let start = 0;
     let iteration = 0;
     const maxIterations = Math.ceil(graphemes.length / (chunkSize - overlap)) + 1;
-  
+
     while (start < graphemes.length) {
       console.log(`Iteration ${iteration}: start=${start}, grapheme length=${graphemes.length}`);
       const end = Math.min(start + chunkSize, graphemes.length);
       console.log(`  end=${end}`);
       const chunk = graphemes.slice(start, end).join('');
-      
+
       if (chunk.trim()) {
         console.log(`  Adding chunk of length ${chunk.length}`);
         chunks.push(chunk.trim());
       }
-      
+
       if (graphemes.length - start <= chunkSize) {
         console.log(`  Remaining text too small, breaking loop`);
         break;
       }
-      
+
       start = Math.max(end - overlap, start + 1);
       console.log(`  New start=${start}`);
       console.log(`  Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
-      
+
       iteration++;
       if (iteration > maxIterations) {
         console.error(`Infinite loop detected in chunkText. Aborting after ${iteration} iterations.`);
         throw new Error(`Infinite loop detected in chunkText`);
       }
-      
+
       if (start >= graphemes.length) {
         console.log(`  Breaking loop: start=${start} >= grapheme length=${graphemes.length}`);
         break;
       }
     }
-    
+
     console.log(`leaving chunkText function, created ${chunks.length} chunks`);
     console.log(`Memory usage: ${process.memoryUsage().heapUsed / 1024 / 1024} MB`);
     return chunks.length > 0 ? chunks : [text];
@@ -74,11 +74,11 @@ class RAGService {
 
       for (let i = 0; i < chunks.length; i++) {
         const chunk = chunks[i];
-        
+
         try {
           // Generate embeddings with fallback
           const embedding = await aiService.generateEmbeddings(chunk);
-          
+
           const document = {
             _id: `${companyId}_${documentId}_${i}`,
             company_id: companyId,
@@ -104,7 +104,7 @@ class RAGService {
 
           await retryWithBackoff(insertOperation, 3, 1000);
           successCount++;
-          
+
         } catch (chunkError) {
           logger.error(`Error storing chunk ${i} for document ${documentId}:`, chunkError);
           // Continue with other chunks even if one fails
@@ -127,39 +127,32 @@ class RAGService {
   async searchRelevantContext(companyId, query, limit = 5) {
     try {
       const collection = astraDB.collection(this.collectionName);
-      
-      // Generate query embedding with fallback
       const queryEmbedding = await aiService.generateEmbeddings(query);
-      
-      // Search with retry
-      const searchOperation = async () => {
-        const results = await collection.find(
-          {
-            company_id: companyId
-          },
-          {
-            vector: queryEmbedding,
-            limit: limit,
-            includeSimilarity: true
-          }
-        );
 
-        return results.toArray();
-      };
+      const cursor = collection.find(
+        { company_id: companyId },
+        {
+          sort: { $vector: queryEmbedding },
+          limit,
+          includeSimilarity: true,
+        }
+      );
 
-      const documents = await retryWithBackoff(searchOperation, 3, 1000);
-      
-      // Extract and combine relevant content
+      const documents = await retryWithBackoff(() => cursor.toArray(), 3, 1000);
+      // console.log("docs  ", documents)
+
+      // filter by similarity threshold
       const relevantContent = documents
-        .filter(doc => doc.$similarity > 0.7) // Only include highly relevant content
+        .filter(doc => doc.$similarity > 0.7)
         .map(doc => doc.content)
-        .join('\n\n');
+        .join("\n\n");
+
+      // console.log("relevantContent ", relevantContent)
 
       return relevantContent;
     } catch (error) {
-      logger.error('Error searching relevant context:', error);
-      // Return empty string instead of throwing to allow chat to continue
-      return '';
+      logger.error("Error searching relevant context:", error);
+      return "";
     }
   }
 
@@ -168,7 +161,7 @@ class RAGService {
     try {
       // Search for relevant context
       const context = await this.searchRelevantContext(companyId, query);
-      
+
       // Prepare messages for AI
       const messages = [
         ...conversationHistory,
@@ -176,8 +169,8 @@ class RAGService {
       ];
 
       // Get chatbot configuration to determine AI model
-      let aiModel = 'gemini-1.5-flash'; // Default fallback model
-      
+      let aiModel = 'gemini-2.0-flash'; // Default fallback model
+
       try {
         const { supabase } = await import('../config/database.js');
         const { data: chatbot } = await supabase
@@ -185,7 +178,7 @@ class RAGService {
           .select('ai_model')
           .eq('company_id', companyId)
           .single();
-        
+
         if (chatbot?.ai_model) {
           aiModel = chatbot.ai_model;
         }
@@ -209,7 +202,7 @@ class RAGService {
       };
     } catch (error) {
       logger.error('Error generating RAG response:', error);
-      
+
       // Fallback to basic AI response without context
       try {
         const messages = [
@@ -242,20 +235,20 @@ class RAGService {
   async deleteDocumentChunks(companyId, documentId) {
     try {
       const collection = astraDB.collection(this.collectionName);
-      
+
       // Delete with retry
       const deleteOperation = async () => {
         const result = await collection.deleteMany({
           company_id: companyId,
           document_id: documentId
         });
-        
+
         return result;
       };
 
       const result = await retryWithBackoff(deleteOperation, 3, 1000);
       logger.info(`Deleted ${result.deletedCount || 0} chunks for document ${documentId}`);
-      
+
       return result.deletedCount || 0;
     } catch (error) {
       logger.error('Error deleting document chunks:', error);
@@ -268,18 +261,18 @@ class RAGService {
   async getDocumentStats(companyId) {
     try {
       const collection = astraDB.collection(this.collectionName);
-      
+
       // Count with retry
       const countOperation = async () => {
         const count = await collection.countDocuments({
           company_id: companyId
         });
-        
+
         return count;
       };
 
       const totalChunks = await retryWithBackoff(countOperation, 3, 1000);
-      
+
       return {
         total_chunks: totalChunks,
         collection_name: this.collectionName

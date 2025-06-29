@@ -189,16 +189,24 @@ export class AIService {
   // Generate response using Gemini
   async generateGeminiResponse(modelName, messages) {
     try {
-      const geminiModel = this.models[modelName] || 'gemini-1.5-flash';
+      const geminiModel = this.models[modelName] || 'gemini-2.0-flash';
       const model = genAI.getGenerativeModel({
         model: geminiModel,
-        systemInstruction: this._extractSystemInstruction(messages)
+        systemInstruction: this._extractSystemInstruction(messages),
       });
 
-      const { history, lastUserMessage } = this._convertMessagesToGeminiFormat(messages);
+      const { history: userHistory, lastUserMessage } = this._convertMessagesToGeminiFormat(messages);
+      const context = this._extractSystemInstruction(messages);
+      const fullHistory = [
+        {
+          role: 'user',
+          parts: [{ text: context }]
+        },
+        ...userHistory
+      ];
 
       const chat = model.startChat({
-        history: history
+        history: fullHistory
       });
 
       const result = await chat.sendMessage(lastUserMessage);
@@ -206,13 +214,14 @@ export class AIService {
 
       return {
         content: response.text(),
-        usage: { total_tokens: 0 } // Gemini doesn't provide token usage
+        usage: { total_tokens: 0 }
       };
     } catch (error) {
       logger.error('Gemini API error:', error);
       throw new Error(`Gemini API failed: ${error.message}`);
     }
   }
+
 
   // Convert OpenAI-style messages to Gemini format
   _convertMessagesToGeminiFormat(messages) {

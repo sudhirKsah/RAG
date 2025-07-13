@@ -102,7 +102,7 @@ Run the SQL commands in `backend/README.md` to set up your Supabase database sch
 
 - [Backend API Documentation](./backend/README.md)
 - [Frontend Documentation](./saas-frontend/README.md)
-- [Customer Portal Documentation](./customer-support-portal/README.md)
+- [Customer Portal Documentation](./customer-care-frontend/README.md)
 
 ## 🌐 Live Demo
 
